@@ -6,7 +6,7 @@
 
 ## 直接使用
 
-在本仓库的 [**Releases**](https://github.com/FANG-158/shixu/releases/latest) 下载 **时叙-v1.0.1-Windows64.zip**，完整解压后双击 **启动文档助手.cmd**。不需要安装 Node.js、Python 或 OCR 软件。请保持启动窗口开启，使用最新版 Edge 或 Chrome。不要直接双击 HTML 文件。
+在本仓库的 [**Releases**](https://github.com/FANG-158/shixu/releases/latest) 下载 **shixu-v1.0.1-Windows64.zip**，完整解压后双击 **启动文档助手.cmd**。不需要安装 Node.js、Python 或 OCR 软件。请保持启动窗口开启，使用最新版 Edge 或 Chrome。不要直接双击 HTML 文件。
 
 ## 功能
 
