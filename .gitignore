@@ -1,0 +1,11 @@
+node_modules/
+app/node_modules/
+app/文档助手依赖/
+dist/
+.tmp/
+.env
+.env.*
+*.log
+*.zip
+*.pdf
+!assets/example.pdf

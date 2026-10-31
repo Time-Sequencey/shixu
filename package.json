@@ -1,0 +1,21 @@
+{
+  "name": "datasheet-pdf-translator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local bilingual PDF reader and electronics datasheet table translator for Windows",
+  "engines": {
+    "node": ">=24.13.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.cjs",
+    "start": "node scripts/start.cjs",
+    "test": "node checks/layout.mjs && node checks/deepseek-batches.cjs",
+    "selfcheck": "node scripts/selfcheck.cjs",
+    "package": "node scripts/package.cjs"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "5.6.205",
+    "tesseract.js": "7.0.0"
+  }
+}
