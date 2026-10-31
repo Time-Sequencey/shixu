@@ -6,7 +6,7 @@ const { createRequire } = require('node:module');
 const copyTree = require('./copy-tree.cjs');
 const root = path.resolve(__dirname, '..');
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('请在 Windows x64 上构建便携包。');
-const destination = path.join(root, 'dist/datasheet-pdf-translator-Windows64');
+const destination = path.join(root, 'dist/时叙_Windows64');
 if (fs.existsSync(destination)) throw new Error('输出文件夹已存在。请先另存旧版，再重新打包：' + destination);
 const app = path.join(destination, 'app');
 fs.mkdirSync(app, { recursive: true });
