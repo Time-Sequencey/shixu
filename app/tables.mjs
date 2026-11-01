@@ -14,21 +14,26 @@ export function detectTableGrids(ink,w,h,unit){
     else if(start>=0){if(y-start>=13/unit)vertical.push({x:x*unit,y:start*unit,width:unit,height:(y-start)*unit});start=-1}
   }}
   const groups=[];
-  for(const line of horizontal.filter(r=>r.width>=65)){let group=groups.find(g=>Math.abs(g[0].x-line.x)<5&&Math.abs(g[0].width-line.width)<8);if(!group){group=[];groups.push(group)}group.push(line)}
+  for(const line of horizontal.filter(r=>r.width>=65)){let group=groups.find(g=>Math.abs(g[0].x-line.x)<2&&Math.abs(g[0].width-line.width)<3);if(!group){group=[];groups.push(group)}group.push(line)}
   const tables=[];
   for(const group of groups){
     const ys=unique(group.map(r=>r.y));if(ys.length<3)continue;
     const mid=values=>[...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
     const x=mid(group.map(r=>r.x)),right=mid(group.map(r=>r.x+r.width));
     // A long gap usually separates two different tables.
-    let chunks=[[]];for(const y of ys){if(chunks.at(-1).length&&y-chunks.at(-1).at(-1)>95)chunks.push([]);chunks.at(-1).push(y)}
+    let chunks=[[]];for(const y of ys){
+      const previous=chunks.at(-1).at(-1);
+      const connected=previous!==undefined&&vertical.some(r=>Math.abs(r.x-x)<3&&r.y<=previous+2&&r.y+r.height>=y-2);
+      if(previous!==undefined&&y-previous>60&&!connected)chunks.push([]);
+      chunks.at(-1).push(y);
+    }
     for(const edges of chunks){if(edges.length<3)continue;const top=edges[0],bottom=edges.at(-1);
-      const lines=thinRules(vertical.filter(r=>r.x>=x-3&&r.x<=right+3&&Math.min(r.y+r.height,bottom)-Math.max(r.y,top)>Math.min(12,(bottom-top)*.3)),false);
+      const lines=thinRules(vertical.filter(r=>r.x>=x-3&&r.x<=right+3&&Math.min(r.y+r.height,bottom)-Math.max(r.y,top)>16),false);
       const xs=unique([x,...lines.filter(r=>r.x>x+8&&r.x<right-8).map(r=>r.x),right],3);
       // Repeated horizontal rules identify a table; an unruled plot with just
       // two axes is deliberately excluded.
       const local=thinRules(horizontal.filter(r=>r.width>=25&&r.y>=top-1&&r.y<=bottom+1&&r.x>=x-3&&r.x+r.width<=right+3&&xs.some(v=>Math.abs(v-r.x)<3)&&xs.some(v=>Math.abs(v-r.x-r.width)<3)),true);
-      tables.push({x,y:top,width:right-x,height:bottom-top,ys:unique(local.map(r=>r.y)),xs,vertical:lines,horizontal:local});
+      tables.push({x,y:top,width:right-x,height:bottom-top,ys:unique([...edges,...local.map(r=>r.y)]),xs,vertical:lines,horizontal:local});
     }
   }
   return tables.filter((t,i)=>!tables.some((p,j)=>j!==i&&area(t,p)>t.width*t.height*.98&&p.width*p.height>t.width*t.height+1));
@@ -36,7 +41,9 @@ export function detectTableGrids(ink,w,h,unit){
 
 export function tableTextNeedsTranslation(text){
   if(!text.trim())return false;
-  if(/^(?:parameter|symbol|conditions?|test conditions?|min(?:imum)?|typ(?:ical)?|max(?:imum)?|units?|value|description|function|current|voltage|frequency|resistance|temperature|power|supply|input|output|pin(?: name| no\.?| number)?)$/i.test(text.trim()))return true;
+  if(/^N\.?\s*C\.?$/i.test(text.trim()))return false;
+  if(/^(?:\(?tCONV(?:\/\d+)?\)?|[0-9A-F]{2,}[hH])$/.test(text.trim()))return false;
+  if(/^(?:parameter|symbol|conditions?|test conditions?|min(?:imum)?|typ(?:ical)?|max(?:imum)?|units?|value|description|function|name|part|temp range|pin-package|top mark|current|voltage|frequency|resistance|temperature|power|supply|input|output|pin(?: name| no\.?| number)?)$/i.test(text.trim()))return true;
   if(/^[A-Z][A-Z0-9_]*(?:[,-]\s*[A-Z0-9_]+)*$/.test(text.trim())||/^[a-z][A-Z][A-Z0-9_]*$/.test(text.trim()))return false;
   if(/[0-9]/.test(text)&&!/[A-Za-z]{3,}/.test(text.replace(/\bto\b/g,'')))return false;
   if(/[=<>≤≥−]/.test(text)&&(text.match(/[a-z]{3,}/g)||[]).length<2)return false;
@@ -47,7 +54,9 @@ export function tableTextNeedsTranslation(text){
 
 export function protectTableText(text){
   const values=[];
-  const masked=text.replace(/\b(?:VIN|VOUT|VCC|VDD|VSS|AGND|PGND|GND|CSN?|DIM|SW|EN|FB|NC|LED|PWM|MOSFET|PCB|PAD|[VIFRDT][A-Z]{2,}[0-9_]*|[a-z][A-Z][A-Z0-9_]*)\b|(?:[-+−±]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s*(?:mV|µA|μA|uA|mA|kHz|MHz|Hz|mW|[VAFWH]|[pnuµμ]?[FH]|[kKM]?Ω|°C|mm|cm|ns|ms|us|µs|%))|[-+−±]?\d+(?:\.\d+)?/g,value=>{if(/^(?:PARAMETER|SYMBOL|CONDITIONS?|TEST|MIN|MAX|TYP|TYPICAL|MINIMUM|MAXIMUM|UNITS?|VALUE|DESCRIPTION|FUNCTION|PIN|NAME|NUMBER|NO|INPUT|OUTPUT|VOLTAGE|CURRENT|FREQUENCY|RESISTANCE|TEMPERATURE|THERMAL|RATING|RATINGS|DRIVER|DRAIN|INTERNAL|TERMINAL)$/.test(value))return value;const id=values.push(value)-1;return `[KEEP_${id}]`});
+  // Ordering tables use Piece for package quantity, never for pin count.
+  text=text.replace(/\bPieces?\b/gi,'件');
+  const masked=text.replace(/\b1-Wire\b|(?:[µμu]?SOP|SOT|SOIC|TSSOP|MSOP|SSOP|SO|TO|QFN|DFN|DIP|LQFP|TQFP)(?:-?\d+)?\b|\b[A-Z]{1,6}-?\d+[A-Za-z0-9+_-]*\b|\b(?:VIN|VOUT|VCC|VDD|VSS|AGND|PGND|GND|CSN?|DIM|SW|EN|FB|NC|LED|PWM|MOSFET|PCB|PAD|VGS|VDS|VGSOTH|TCONV|[a-z][A-Z][A-Z0-9_]*)\b|(?:[-+−±]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s*(?:mV|µA|μA|uA|mA|kHz|MHz|Hz|mW|[VAFWH]|[pnuµμ]?[FH]|[kKM]?Ω|°C|mm|cm|ns|ms|us|µs|%))|[-+−±]?\d+(?:\.\d+)?/g,value=>{if(/^(?:PARAMETER|SYMBOL|CONDITIONS?|TEST|MIN|MAX|TYP|TYPICAL|MINIMUM|MAXIMUM|UNITS?|VALUE|DESCRIPTION|FUNCTION|PIN|NAME|NUMBER|NO|INPUT|OUTPUT|VOLTAGE|CURRENT|FREQUENCY|RESISTANCE|TEMPERATURE|THERMAL|RATING|RATINGS|DRIVER|DRAIN|INTERNAL|TERMINAL)$/.test(value))return value;const id=values.push(value)-1;return `[KEEP_${id}]`});
   return {text:masked,restore(translated){
     for(let i=0;i<values.length;i++)if(translated.split(`[KEEP_${i}]`).length!==2)throw Error('表格译文未保留参数标记，请重试该页');
     if(/\d/.test(translated.replace(/\[KEEP_\d+\]/g,'')))throw Error('表格译文新增了数值，请重试该页');
@@ -56,26 +65,47 @@ export function protectTableText(text){
   }};
 }
 
+export const tableHeaderTranslations=new Map(Object.entries({
+  'PART':'型号','TEMP RANGE':'温度范围','PIN-PACKAGE':'引脚与封装','TOP MARK':'顶部标记',
+  'PIN':'引脚','NAME':'名称','FUNCTION':'功能','PARAMETER':'参数','SYMBOL':'符号','COMMAND':'命令','PROTOCOL':'协议','NOTES':'备注',
+  'MIN':'最小值','TYP':'典型值','MAX':'最大值','UNIT':'单位','UNITS':'单位',
+  'MASTER MODE':'主机模式','DATA (LSB FIRST)':'数据（最低位先行）','COMMENTS':'说明',
+  'RESET':'复位','PRESENCE':'存在脉冲',
+  'REVISION DATE':'修订日期','DESCRIPTION':'说明','PAGES CHANGED':'修改页码',
+  'RESOLUTION (BITS)':'分辨率（位）','MAX CONVERSION TIME':'最大转换时间',
+  'TEMPERATURE (°C)':'温度（°C）','DIGITAL OUTPUT (BINARY)':'数字输出（二进制）','DIGITAL OUTPUT (HEX)':'数字输出（十六进制）',
+  'NO CONNECTION':'不连接','GROUND':'地','CONVERT T':'温度转换 T','RECALL E²':'回读 E²',
+  'OPTIONAL VDD. VDD MUST BE GROUNDED FOR OPERATION IN PARASITE POWER MODE.':'可选的外部供电端 VDD。采用寄生供电模式时，VDD 必须接地。',
+  '1-WIRE BUS ACTIVITYAFTER COMMAND IS ISSUED':'命令发出后的1-Wire总线活动',
+  '1-WIRE BUS ACTIVITY AFTER COMMAND IS ISSUED':'命令发出后的1-Wire总线活动'
+}));
+const extendedHeader=/^(?:temperature\s*\(°?c\)|digital output\s*\((?:binary|hex)\)|resolution\s*\(bits\)|max conversion time|master mode|data\s*\(lsb first\)|comments|revision date|pages changed)$/i;
+export function protectInlineText(text){
+  const values=[];const masked=text.replace(/[A-Za-z]+[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+/gu,value=>`[KEEP_${values.push(value)-1}]`);
+  return {text:masked,restore(translated){for(let i=0;i<values.length;i++)if(translated.split(`[KEEP_${i}]`).length!==2)throw Error('译文未完整保留上下标，请重试该页');return translated.replace(/\[KEEP_(\d+)\]/g,(_,i)=>{if(!values[Number(i)])throw Error('译文上下标标记错误');return values[Number(i)]})}};
+}
+
 export function buildTables(rawRows,grids){
   const fragments=rawRows.flatMap(r=>r.parts?.length?r.parts:r.words?.length?r.words:[r]).filter(r=>r.text?.trim());
   const tables=[];
   for(const grid of grids||[]){
     const inside=fragments.filter(r=>r.y+r.height/2>grid.y&&r.y+r.height/2<grid.y+grid.height&&r.x+r.width/2>grid.x&&r.x+r.width/2<grid.x+grid.width);
     if(!inside.length)continue;
-    let xs=grid.xs;
+    let xs=grid.xs,virtualColumns=false;
     if(xs.length<3){
       // Borderless columns: recurring left edges plus the first header line.
       const header=inside.filter(r=>r.y<grid.ys[1]);
       const starts=unique(header.map(r=>r.x),8);
       if(starts.length<2)continue;
       xs=[grid.x,...starts.slice(1).map(x=>x-4),grid.x+grid.width];
+      virtualColumns=true;
     }
     const cells=[];
     for(let y=0;y<grid.ys.length-1;y++){
       const top=grid.ys[y],bottom=grid.ys[y+1];let start=xs[0];
       for(let x=1;x<xs.length;x++){
         const last=x===xs.length-1;
-        const divider=last||!grid.vertical.length||grid.vertical.some(r=>Math.abs(r.x-xs[x])<3&&Math.min(r.y+r.height,bottom)-Math.max(r.y,top)>(bottom-top)*.55);
+        const divider=last||virtualColumns||!grid.vertical.length||grid.vertical.some(r=>Math.abs(r.x-xs[x])<3&&Math.min(r.y+r.height,bottom)-Math.max(r.y,top)>(bottom-top)*.55);
         if(!divider)continue;
         const cell={x:start,y:top,width:xs[x]-start,height:bottom-top};start=xs[x];
         const above=cells.find(c=>Math.abs(c.x-cell.x)<2&&Math.abs(c.width-cell.width)<2&&Math.abs(c.y+c.height-top)<2);
@@ -94,11 +124,11 @@ export function buildTables(rawRows,grids){
         Object.assign(cell,{text,sourceRows:items,fontSize:font,translate:tableTextNeedsTranslation(text),header:false});
     }
     // Require a genuine table header, so graph gridlines remain figures.
-    const headers=cells.filter(c=>/^(?:parameter|symbol|test conditions?|min(?:imum)?|typ(?:ical)?|max(?:imum)?|units?|value|description|function|pin(?: name| no\.?| number)?)$/i.test(c.text));
+    const headers=cells.filter(c=>extendedHeader.test(c.text)||/^(?:parameter|symbol|conditions?|test conditions?|min(?:imum)?|typ(?:ical)?|max(?:imum)?|units?|value|description|function|name|part|temp range|pin-package|top mark|command|protocol|notes|pin(?: name| no\.?| number)?)$/i.test(c.text));
     if(headers.length<2)continue;
     const top=Math.min(...headers.map(c=>c.y)),bottom=Math.max(...cells.filter(c=>c.text&&c.y>=top).map(c=>c.y+c.height));
-    const kept=cells.filter(c=>c.y>=top&&c.y<bottom);for(const c of kept)c.header=Math.abs(c.y-top)<2;
-    const fixedColumns=headers.filter(c=>Math.abs(c.y-top)<2&&/^(?:symbol|units?|pin (?:no\.?|number))$/i.test(c.text));
+    const kept=cells.filter(c=>c.y>=top&&c.y<bottom);for(const c of kept){c.header=Math.abs(c.y-top)<2;if(c.header)c.translate=true}
+    const fixedColumns=headers.filter(c=>Math.abs(c.y-top)<2&&/^(?:symbol|units?|master mode|pin (?:no\.?|number))$/i.test(c.text));
     for(const cell of kept)if(!cell.header&&fixedColumns.some(h=>cell.x>=h.x-2&&cell.x+cell.width<=h.x+h.width+2))cell.translate=false;
     tables.push({...grid,y:top,height:bottom-top,ys:grid.ys.filter(y=>y>=top-1&&y<=bottom+1),horizontal:grid.horizontal.filter(r=>r.y>=top-1&&r.y<=bottom+1),vertical:grid.vertical.map(r=>({...r,y:Math.max(r.y,top),height:Math.min(r.y+r.height,bottom)-Math.max(r.y,top)})).filter(r=>r.height>0),cells:kept});
   }

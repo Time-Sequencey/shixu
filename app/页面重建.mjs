@@ -1,10 +1,45 @@
 // Page geometry uses PDF points; image analysis never changes the source page.
 import {detectTableGrids,buildTables,paintTables} from './tables.mjs';
-export const LAYOUT_VERSION = 'rebuild-4-tables';
+export const LAYOUT_VERSION = 'rebuild-5.2-geometry';
 const median = values => { const a = values.filter(Number.isFinite).sort((a,b)=>a-b); return a.length ? a[Math.floor(a.length/2)] : 9; };
 const overlap = (a,b) => Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y));
 const bounds = rows => { const x=Math.min(...rows.map(r=>r.x)),y=Math.min(...rows.map(r=>r.y));return {x,y,width:Math.max(...rows.map(r=>r.x+r.width))-x,height:Math.max(...rows.map(r=>r.y+r.height))-y}; };
 const expand = (r,n,page) => ({x:Math.max(0,r.x-n),y:Math.max(0,r.y-n),width:Math.min(page.width,r.x+r.width+n)-Math.max(0,r.x-n),height:Math.min(page.height,r.y+r.height+n)-Math.max(0,r.y-n)});
+
+// PDF drawing order is unrelated to reading order. Attach small raised/lowered
+// glyphs before assigning regions, then form lines in geometric order.
+export function extractNativeRows(content,base,regions,transform){
+  const fragments=content.items.filter(i=>i.str?.trim()).map(item=>{
+    const tx=transform(base.transform,item.transform),height=Math.max(3,Math.hypot(tx[2],tx[3]));
+    return {text:item.str.trim(),x:tx[4],y:tx[5]-height*.82,baseline:tx[5],width:Math.max(.5,item.width),height,
+      rotated:Math.abs(tx[1])>Math.abs(tx[0])*.25,
+      mathFont:/math|symbol|cmsy|cmex|stix/i.test(content.styles[item.fontName]?.fontFamily||'')};
+  });
+  const subs='₀₁₂₃₄₅₆₇₈₉',supers='⁰¹²³⁴⁵⁶⁷⁸⁹',attached=new Set();
+  for(const small of [...fragments].sort((a,b)=>a.height-b.height)){
+    if(small.rotated||!/^(?:\d{1,3}|st|nd|rd|th)$/.test(small.text))continue;
+    const host=fragments.filter(big=>big!==small&&!attached.has(big)&&!big.rotated&&big.height>small.height*1.18&&big.height<small.height*2.5&&/[A-Za-z0-9]$/.test(big.text)&&small.x>=big.x+big.width-big.height*.15&&small.x-big.x-big.width<big.height*.45&&Math.abs(small.y-big.y)>big.height*.15&&Math.abs(small.baseline-big.baseline)<big.height*.65).sort((a,b)=>Math.abs(small.x-a.x-a.width)-Math.abs(small.x-b.x-b.width))[0];
+    if(!host)continue;
+    const alphabet=small.y>host.y?subs:supers;
+    host.text+=/^[a-z]+$/.test(small.text)?small.text:small.text.replace(/\d/g,d=>alphabet[Number(d)]);host.width=Math.max(host.width,small.x+small.width-host.x);attached.add(small);
+  }
+  const rows=[];
+  for(const item of fragments.filter(r=>!attached.has(r)).sort((a,b)=>a.y-b.y||a.x-b.x)){
+    const region=regions.map(r=>({r,area:overlap(item,r)})).sort((a,b)=>b.area-a.area)[0]?.r;
+    if(!region)continue;
+    const row={...item,regionId:region.id,parts:[{...item}]};
+    const line=rows.filter(other=>!row.rotated&&!other.rotated&&(other.regionId===row.regionId||row.x-other.x-other.width<6)&&Math.abs(other.baseline-row.baseline)<Math.max(row.height,other.height)*.25&&Math.max(row.height,other.height)/Math.min(row.height,other.height)<1.3&&row.x>=other.x+other.width-row.height*.6&&row.x-other.x-other.width<Math.max(row.height*2.3,20)).sort((a,b)=>b.x+b.width-a.x-a.width)[0];
+    if(line){
+      const gap=row.x-line.x-line.width;
+      const separator=gap<row.height*.1&&!/\s$/.test(line.text)&&!/^\s/.test(row.text)?'':' ';
+      line.text+=separator+row.text;line.parts.push(...row.parts);line.width=Math.max(line.width,row.x+row.width-line.x);line.mathFont||=row.mathFont;
+    }else rows.push(row);
+  }
+  // PDF bullet glyphs are often private-use characters in a symbol font.
+  for(const row of rows){if(/^[•▪◦]/u.test(row.text)){row.bullet=true;row.text=row.text.replace(/^[•▪◦]\s*/u,'')}}
+  for(const row of rows)row.regionId=regions.map(r=>({r,area:overlap(row,r)})).sort((a,b)=>b.area-a.area)[0]?.r.id;
+  return rows.filter(r=>r.text.trim());
+}
 
 export function analyzeRaster(image,page) {
   const unit=1.2,w=Math.ceil(page.width/unit),h=Math.ceil(page.height/unit),ink=new Uint8Array(w*h);
@@ -30,7 +65,7 @@ export function analyzeRaster(image,page) {
     }
     const rect={x:x0*unit,y:y0*unit,width:(x1-x0+1)*unit,height:(y1-y0+1)*unit};
     if(count>=4&&rect.width>=2.4&&rect.width<=5&&rect.height>=2.4&&rect.height<=5&&count/((x1-x0+1)*(y1-y0+1))>.65)bullets.push(rect);
-    if(count>25&&rect.height>=19&&rect.width>=20&&rect.height<page.height*.7)components.push(rect);
+    if(count>25&&rect.height>=19&&rect.width>=20)components.push(rect);
   }
   const rules=[];
   for(let y=0;y<h;y++){
@@ -59,7 +94,13 @@ export function analyzeRaster(image,page) {
     if(x1>x0&&y1>y0)regions.push({...r,x0:Math.max(r.x0,x0-2),x1:Math.min(r.x1,x1+2),y0:Math.max(r.y0,y0-2),y1:Math.min(r.y1,y1+2)});
   }
   split({x0:Math.floor(8/unit),y0:0,x1:Math.min(w,Math.ceil((page.width-8)/unit)),y1:h});
-  return {regions:regions.map((r,i)=>({id:i,x:r.x0*unit,y:r.y0*unit,width:(r.x1-r.x0)*unit,height:(r.y1-r.y0)*unit})),graphics:mergeRects(components.map(r=>expand(r,3,page)),3),rules:mergeRects(rules,1),bullets,tableGrids:detectTableGrids(ink,w,h,unit)};
+  // Thin grey table borders disappear in the coarser segmentation bitmap.
+  const gridUnit=.5,gw=Math.ceil(page.width/gridUnit),gh=Math.ceil(page.height/gridUnit),gridInk=new Uint8Array(gw*gh);
+  for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){
+    const px=Math.min(image.width-1,Math.floor(x*gridUnit*image.width/page.width)),py=Math.min(image.height-1,Math.floor(y*gridUnit*image.height/page.height));
+    const i=(py*image.width+px)*4;gridInk[y*gw+x]=image.data[i]+image.data[i+1]+image.data[i+2]<735?1:0;
+  }
+  return {regions:regions.map((r,i)=>({id:i,x:r.x0*unit,y:r.y0*unit,width:(r.x1-r.x0)*unit,height:(r.y1-r.y0)*unit})),graphics:mergeRects(components.map(r=>expand(r,2,page)),3),rules:mergeRects(rules,1),bullets,tableGrids:detectTableGrids(gridInk,gw,gh,gridUnit)};
 }
 
 function mergeRects(rects,gap=3){
@@ -69,10 +110,12 @@ function mergeRects(rects,gap=3){
 
 export function isFormula(row){
   const text=row.text.trim(),words=text.match(/[A-Za-z]{3,}/g)||[];
-  if(row.mathFont&&words.length<5)return true;
-  const symbols=(text.match(/[=<>∑∫√≈≤≥±∂∇∞∏∈∝]/gu)||[]).length;
-  return (symbols>0&&words.length<=4&&text.length<220)||(/^\(?\d+\)?$/.test(text)&&row.equationNumber===true);
+  if(row.mathFont&&words.length<2)return true;
+  const symbols=(text.match(/[=<>∑∫√≈≤≥∂∇∞∏∈∝]/gu)||[]).length;
+  return (symbols>0&&words.length<=2&&text.length<220&&!/[.!?]\s*$/.test(text))||(/^\(?\d+\)?$/.test(text)&&row.equationNumber===true);
 }
+
+const figureCaption=text=>/^Fig(?:ure)?\.?\s*\d+(?:[.\s:]|$)/i.test(text)&&!/^Fig(?:ure)?\.?\s*\d+\s+(?:shows?|illustrates?|depicts?|presents?|is|provides?)\b/i.test(text);
 
 // Text geometry can reveal a gutter even when bullets or horizontal rules bridge it.
 export function refineTextColumns(rows,analysis,page){
@@ -106,7 +149,7 @@ export function refineTextColumns(rows,analysis,page){
   for(const region of regions.sort((a,b)=>a.y-b.y||a.x-b.x)){
     const lines=result.filter(r=>r.regionId===region.id);if(!lines.length){joined.push({...region,id:joined.length});continue}
     const box=bounds(lines),font=median(lines.map(r=>r.height));
-    const previous=joined.filter(r=>r.lines?.length&&Math.abs(r.left-box.x)<7&&Math.abs(r.font-font)<font*.22&&box.y>=r.bottom-1&&box.y-r.bottom<font*1.4&&Math.max(box.width,r.textWidth)>Math.min(box.width,r.textWidth)*.3).sort((a,b)=>b.bottom-a.bottom)[0];
+    const previous=joined.filter(r=>r.lines?.length&&Math.abs(r.left-box.x)<Math.max(7,font*2.4)&&Math.abs(r.font-font)<font*.22&&box.y>=r.bottom-1&&box.y-r.bottom<font*1.4&&Math.min(r.left+r.textWidth,box.x+box.width)-Math.max(r.left,box.x)>Math.min(box.width,r.textWidth)*.65).sort((a,b)=>b.bottom-a.bottom)[0];
     if(previous){const b=bounds([previous,region]);Object.assign(previous,b,{bottom:box.y+box.height,textWidth:Math.max(previous.textWidth,box.width)});previous.lines.push(...lines)}
     else joined.push({...region,id:joined.length,left:box.x,bottom:box.y+box.height,font,textWidth:box.width,lines:[...lines]});
   }
@@ -116,9 +159,13 @@ export function refineTextColumns(rows,analysis,page){
 
 export function buildReadingPage(rows,analysis,page,options={}){
   const tables=options.professional?buildTables(rows,analysis.tableGrids):[];
-  ({rows,analysis}=refineTextColumns(rows,analysis,page));
-  const textRows=rows.filter(r=>r.text?.trim()).map(r=>({...r,text:r.text.trim(),bullet:(analysis.bullets||[]).some(b=>r.x-b.x-b.width>=1&&r.x-b.x-b.width<12&&Math.abs(b.y+b.height/2-r.y-r.height/2)<r.height*.45)}));
-  const protectedRects=analysis.graphics.filter(r=>!tables.some(t=>overlap(r,t)>Math.min(r.width*r.height,t.width*t.height)*.8)).map(r=>({...r,kind:'figure'}));
+  ({rows,analysis}=refineTextColumns(rows.filter(r=>!tables.some(t=>overlap(r,t)>r.width*r.height*.5)),analysis,page));
+  const textRows=rows.filter(r=>r.text?.trim()).map(r=>({...r,text:r.text.trim(),bullet:r.bullet||(analysis.bullets||[]).some(b=>r.x-b.x-b.width>=1&&r.x-b.x-b.width<12&&Math.abs(b.y+b.height/2-r.y-r.height/2)<r.height*.45)}));
+  const protectedRects=analysis.graphics.filter(r=>!tables.some(t=>overlap(r,t)>Math.min(r.width*r.height,t.width*t.height)*.8))
+    // Raised glyphs can join two prose lines into a small raster component.
+    .filter(r=>!(r.height<45&&r.width<110&&textRows.some(t=>overlap(r,t)>0&&t.width>r.width*2&&(t.text.match(/[A-Za-z]{3,}/g)||[]).length>=5)))
+    .map(r=>({...r,kind:'figure'}));
+  for(const row of textRows.filter(r=>/^\d+\s+of\s+\d+$/i.test(r.text)&&r.y>page.height*.9))protectedRects.push({...expand(row,1,page),kind:'page-number'});
   // Never collect labels from the adjacent column, even when they are only a
   // few points from the plot border. A genuinely wide figure can span both.
   const lane=r=>{
@@ -147,11 +194,11 @@ export function buildReadingPage(rows,analysis,page,options={}){
   // A publisher banner combines graphics and text; preserve the complete banner.
   for(const region of analysis.regions){
     const inside=protectedRects.filter(r=>overlap(r,region)>r.width*r.height*.5);
-    if(region.y<page.height*.2&&inside.length>=2)protectedRects.push({...region,kind:'banner'});
+    if(region.y<page.height*.2&&region.height<page.height*.16&&inside.length>=2)protectedRects.push({...region,kind:'banner'});
     if((region.y<35||region.y>page.height-35)&&region.height<18)protectedRects.push({...region,kind:'running-header'});
   }
   // A figure is copied as one rectangle, including its axis labels and annotations.
-  for(const caption of textRows.filter(r=>/^Fig(?:ure)?\.?\s*\d/i.test(r.text))){
+  for(const caption of textRows.filter(r=>figureCaption(r.text))){
     const column=lane(caption);
     const nearby=protectedRects.filter(r=>r.kind==='figure'&&inLane(r,column)&&r.y+r.height<=caption.y+5&&caption.y-r.y-r.height<95&&Math.min(r.x+r.width,caption.x+Math.max(caption.width,100))>Math.max(r.x,caption.x-30));
     if(nearby.length){
@@ -182,14 +229,18 @@ export function buildReadingPage(rows,analysis,page,options={}){
     const proseWords=regionRows.reduce((n,r)=>n+(r.text.match(/[A-Za-z]{3,}/g)||[]).length,0);
     if(region&&proseWords<9){protectedRects.push({...expand(region,2,page),kind:'formula'});continue}
     const number=textRows.find(other=>other!==row&&Math.abs(other.y-row.y)<row.height&&/^\(?\d+\)?$/.test(other.text.trim())&&other.x>row.x+row.width);
-    const box=expand(bounds(number?[row,number]:[row]),8,page);
-    if(region){box.y=Math.max(region.y,box.y);box.height=Math.min(region.y+region.height-box.y,box.height+4)}
+    const box=expand(bounds(number?[row,number]:[row]),2,page);
+    if(region){box.y=Math.max(region.y,box.y);box.height=Math.min(region.y+region.height-box.y,box.height+2)}
     const nextProse=Math.min(page.height,...textRows.filter(t=>t.y>=row.y+row.height+2&&!isFormula(t)&&(t.text.match(/[A-Za-z]{3,}/g)||[]).length>=5&&t.x<box.x+box.width&&t.x+t.width>box.x).map(t=>t.y));
     box.height=Math.min(box.height,nextProse-2-box.y);
     protectedRects.push({...box,kind:'formula'});
   }
   // Keep separate crop rectangles: joining a formula with an adjacent figure
   // into their bounding box can silently copy the prose in the empty corners.
+  for(const rect of protectedRects.filter(r=>r.kind==='figure')){
+    const caption=textRows.find(t=>figureCaption(t.text)&&t.y<rect.y&&t.y+t.height>rect.y&&t.x<rect.x+rect.width&&t.x+t.width>rect.x);
+    if(caption){const bottom=rect.y+rect.height;rect.y=caption.y+caption.height+1;rect.height=bottom-rect.y;}
+  }
   let preserved=protectedRects.filter((r,i)=>!protectedRects.some((p,j)=>j!==i&&overlap(r,p)>=r.width*r.height-.01&&(p.width*p.height>r.width*r.height+.01||j<i))).map(({x,y,width,height,kind})=>({x,y,width,height,kind}));
   for(const table of tables)preserved=preserved.flatMap(r=>{
     if(!overlap(r,table))return [r];
@@ -203,7 +254,7 @@ export function buildReadingPage(rows,analysis,page,options={}){
   for(const region of analysis.regions){
     let slices=[{...region}];
     for(const r of exclusions){
-      if(Math.min(r.x+r.width,region.x+region.width)-Math.max(r.x,region.x)<region.width*.35)continue;
+      if(Math.min(r.x+r.width,region.x+region.width)-Math.max(r.x,region.x)<region.width*(r.kind==='formula'?.08:.35))continue;
       slices=slices.flatMap(s=>{
         if(r.y>=s.y+s.height||r.y+r.height<=s.y)return [s];
         return [{...s,height:r.y-2-s.y},{...s,y:r.y+r.height+2,height:s.y+s.height-r.y-r.height-2}].filter(p=>p.height>2);
@@ -216,20 +267,23 @@ export function buildReadingPage(rows,analysis,page,options={}){
     if(!lines.length)continue;
     const lineHeight=median(lines.map(l=>l.height));
     const starts=lines.map(l=>l.x).sort((a,b)=>a-b),left=starts[Math.floor(starts.length*.15)]??region.x;
+    const bodyLeft=median(lines.filter(l=>l.bullet).map(l=>l.x));
+    const bulletIndent=lines.some(l=>l.bullet)?bodyLeft:left;
     const right=Math.min(page.width-12,region.x+region.width,Math.max(...lines.map(l=>l.x+l.width)));
     const fullWidth=right-left;
     const typicalGap=median(lines.slice(1).map((r,i)=>r.y-lines[i].y-lines[i].height).filter(n=>n>=0));
     let group=[];
     const finish=()=>{if(!group.length)return;const box=bounds(group),text=group.map((line,i)=>i&&/[a-z]-$/i.test(group[i-1].text)?line.text.replace(/^\s+/,''):line.text).reduce((joined,text)=>/[a-z]-$/i.test(joined)?joined.slice(0,-1)+text:(joined?joined+' ':'')+text,'');
-      const id=paragraphs.length;paragraphs.push({id,text,sourceRows:group,x:left,y:box.y,width:fullWidth,height:box.height,fontSize:median(group.map(l=>l.height)),bullet:group[0].bullet,indent:!group[0].bullet&&group[0].x-left>lineHeight*.65,heading:group.length<=2&&(group[0].height>lineHeight*1.18||/^\d+(?:\.\d+)*\.?\s*[A-Z]/.test(text)),zoneId:zones.length});group=[];return id};
+      const id=paragraphs.length;paragraphs.push({id,text,sourceRows:group,x:left,y:box.y,width:fullWidth,height:box.height,fontSize:median(group.map(l=>l.height)),bullet:group[0].bullet,indent:!group[0].bullet&&group[0].x-left>lineHeight*.65,heading:group.length<=2&&(group[0].height>lineHeight*1.18||/^[A-Z][A-Z\s-]{3,}$/.test(text)||/^\d+(?:\.\d+)*\.?\s*[A-Z]/.test(text)),zoneId:zones.length});group=[];return id};
     const ids=[];
     for(const line of lines){const previous=group[group.length-1];
       const paragraphChange=previous&&line.paragraphId&&previous.paragraphId&&line.paragraphId!==previous.paragraphId;
-      const indent=previous&&line.x-left>lineHeight*.7&&previous.x+previous.width>left+fullWidth*.6;
+      const indent=previous&&!group[0].bullet&&line.x-bulletIndent>lineHeight*.7&&previous.x+previous.width>left+fullWidth*.6;
       const gap=previous&&line.y-previous.y-previous.height;
       const sizeChange=previous&&Math.max(line.height,previous.height)/Math.max(1,Math.min(line.height,previous.height))>1.3;
-      const shortEnd=previous&&previous.width<fullWidth*.72&&gap>=typicalGap*.8;
-      if(previous&&(line.bullet||paragraphChange||indent||gap>Math.max(lineHeight*.8,typicalGap+lineHeight*.6)||sizeChange||shortEnd)){const id=finish();if(id!=null)ids.push(id)}
+      const headingChange=previous&&/^[A-Z][A-Z\s-]{3,}$/.test(previous.text)&&!previous.bullet;
+      const shortEnd=previous&&!group[0].bullet&&previous.width<fullWidth*.72&&gap>=Math.max(lineHeight*.3,typicalGap*.8);
+      if(previous&&(line.bullet||paragraphChange||indent||gap>Math.max(lineHeight*.8,typicalGap+lineHeight*.6)||sizeChange||shortEnd||headingChange)){const id=finish();if(id!=null)ids.push(id)}
       group.push(line);
     }
     const id=finish();if(id!=null)ids.push(id);
@@ -249,27 +303,45 @@ export function buildReadingPage(rows,analysis,page,options={}){
 
 export function wrapParagraph(ctx,text,width,font,indent=0){
   const lines=[];let current='',limit=width-indent;
-  const tokens=text.match(/[A-Za-z0-9_]+(?:[.'’-][A-Za-z0-9_]+)*|\s+|[^\x00-\x7F]|./gu)||[];
+  const tokens=text.match(/[A-Za-z0-9_]+(?:[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+)?(?:[.'’°µμ+-][A-Za-z0-9_]+)*|\s+|[^\x00-\x7F]|./gu)||[];
   for(let token of tokens){
     if(!current&&/^\s+$/.test(token))continue;
-    if(ctx.measureText(current+token).width>limit&&current){
+    if(measureInline(ctx,current+token)>limit&&current){
       if(/^[，。；：！？、）】》”’\])},.;:!?]/u.test(token)&&current.length>1){const tail=[...current].pop();lines.push(current.slice(0,-tail.length).trimEnd());current=tail;limit=width}
       else{lines.push(current.trimEnd());current='';limit=width;if(/^\s+$/.test(token))continue}
     }
-    if(ctx.measureText(token).width>limit){for(const ch of token){if(current&&ctx.measureText(current+ch).width>limit){lines.push(current);current='';limit=width}current+=ch}}
+    if(measureInline(ctx,token)>limit){for(const ch of token){if(current&&measureInline(ctx,current+ch)>limit){lines.push(current);current='';limit=width}current+=ch}}
     else current+=token;
   }
   if(current)lines.push(current.trimEnd());return lines;
+}
+
+export function inlineRuns(text){
+  return (text.match(/[₀-₉]+|[⁰¹²³⁴⁵⁶⁷⁸⁹]+|[^₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+/gu)||[]).map(value=>{
+    const sub=/^[₀-₉]/u.test(value),sup=/^[⁰¹²³⁴⁵⁶⁷⁸⁹]/u.test(value);
+    return {text:sub?value.replace(/[₀-₉]/gu,d=>String('₀₁₂₃₄₅₆₇₈₉'.indexOf(d))):sup?value.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/gu,d=>String('⁰¹²³⁴⁵⁶⁷⁸⁹'.indexOf(d))):value,script:sub?'sub':sup?'super':null};
+  });
+}
+function measureInline(ctx,text){
+  if(!/[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]/u.test(text))return ctx.measureText(text).width;
+  const original=ctx.font;let width=0;
+  for(const run of inlineRuns(text)){ctx.font=run.script?original.replace(/([\d.]+)px/,(_,n)=>Number(n)*.7+'px'):original;width+=ctx.measureText(run.text).width}
+  ctx.font=original;return width;
+}
+function paintInline(ctx,text,x,y,font){
+  const original=ctx.font;
+  for(const run of inlineRuns(text)){ctx.font=run.script?original.replace(/([\d.]+)px/,(_,n)=>Number(n)*.7+'px'):original;ctx.fillText(run.text,x,y+(run.script==='sub'?font*.38:run.script==='super'?-font*.15:0));x+=ctx.measureText(run.text).width}
+  ctx.font=original;
 }
 
 export function typesetPage(ctx,model,translations){
   const placed=[];
   for(const zone of model.zones){
     const paragraphs=zone.paragraphIds.map(id=>model.paragraphs[id]);
-    const max=zone.tableCell?Math.min(14,zone.sourceFont*1.2):Math.min(18,Math.max(10,zone.sourceFont*1.55)),min=5.5;
+    const max=zone.tableCell?Math.min(12,zone.sourceFont):Math.min(18,Math.max(10,zone.sourceFont*1.55)),min=5.5;
     const trial=font=>{
       let y=zone.y;const result=[];
-      for(const p of paragraphs){const size=p.heading?Math.min(20,font*1.12):font;
+      for(const p of paragraphs){const size=p.heading&&!zone.tableCell?Math.min(20,font*1.12):font;
         ctx.font=`${p.heading?'600 ':''}${size}px "Microsoft YaHei", sans-serif`;
         const text=(p.bullet?'• ':'')+(translations?.[p.id]??p.text),indent=p.indent&&!p.heading?size*2:0;
         const lines=wrapParagraph(ctx,text,zone.width,size,indent),leading=size*1.36;
@@ -281,7 +353,11 @@ export function typesetPage(ctx,model,translations){
     let lo=Math.min(min,zone.height/3),hi=max;
     while(trial(lo).height>zone.height&&lo>.15)lo/=2;
     for(let i=0;i<20;i++){const mid=(lo+hi)/2;if(trial(mid).height<=zone.height)lo=mid;else hi=mid}
-    placed.push(...trial(lo).result);
+    // Reserve a small margin for font hinting differences between preview and
+    // scaled export, and validate the actual final line set after fitting.
+    let fitted=trial(lo*.97);
+    for(let i=0;fitted.height>zone.height+.01&&i<30;i++){lo*=.97;fitted=trial(lo*.97)}
+    placed.push(...fitted.result);
   }
   return placed;
 }
@@ -295,6 +371,6 @@ export function paintRebuiltPage(ctx,source,model,placed,scale){
   for(const r of model.rules){if([...model.preserved,...(model.tables||[])].some(p=>overlap(r,p)>r.width*r.height*.5))continue;ctx.beginPath();ctx.moveTo(r.x*scale,r.y*scale);ctx.lineTo((r.x+r.width)*scale,r.y*scale);ctx.stroke()}
   ctx.fillStyle='#111';ctx.textBaseline='top';
   for(const p of placed){ctx.font=`${p.heading?'600 ':''}${p.fontSize*scale}px "Microsoft YaHei", sans-serif`;
-    p.lines.forEach((line,i)=>ctx.fillText(line,(p.x+(i?0:p.indent))*scale,(p.y+i*p.lineHeight)*scale));}
+    p.lines.forEach((line,i)=>paintInline(ctx,line,(p.x+(i?0:p.indent))*scale,(p.y+i*p.lineHeight)*scale,p.fontSize*scale));}
   ctx.restore();
 }

@@ -17,7 +17,7 @@ for (const name of fs.readdirSync(path.join(root, 'app'))) {
 for (const name of ['assets', 'checks', 'licenses']) copyTree(path.join(root, name), path.join(destination, name));
 fs.mkdirSync(path.join(destination, 'scripts'));
 for (const name of ['start.cjs', 'selfcheck.cjs']) fs.copyFileSync(path.join(root, 'scripts', name), path.join(destination, 'scripts', name));
-for (const name of ['boot.cjs', 'README.md', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(destination, name));
+for (const name of ['boot.cjs', 'README.md', '项目交接与迭代说明.md', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(destination, name));
 fs.mkdirSync(path.join(destination, 'runtime'));
 fs.copyFileSync(process.execPath, path.join(destination, 'runtime/node.exe'));
 const copied = new Map();

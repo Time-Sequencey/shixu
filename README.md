@@ -6,12 +6,13 @@
 
 ## 直接使用
 
-在本仓库的 [**Releases**](https://github.com/FANG-158/shixu/releases/latest) 下载 **shixu-v1.0.1-Windows64.zip**，完整解压后双击 **启动文档助手.cmd**。不需要安装 Node.js、Python 或 OCR 软件。请保持启动窗口开启，使用最新版 Edge 或 Chrome。不要直接双击 HTML 文件。
+在本仓库的 [**Releases**](https://github.com/Time-Sequencey/shixu/releases/latest) 下载 Windows64 压缩包，完整解压后双击 **启动文档助手.cmd**。不需要安装 Node.js、Python 或 OCR 软件。请保持启动窗口开启，使用最新版 Edge 或 Chrome。不要直接双击 HTML 文件。
 
 ## 功能
 
 - 支持文本 PDF，以及使用本地英文 OCR 识别的扫描 PDF。
 - 双栏与自然段分块、自动字号、原位置表格单元格翻译。
+- 整页流程图保留为原图；合并正文上下标，并分别绘制下标，避免拆行和字体方框。
 - 开启“电子专业版”自动翻译当前页，包含表头、引脚说明和参数描述；数值、单位、符号列、引脚代号和独立公式保留原文。
 - 图片保留原图；普通模式保留表格原图。
 - 逐页或整份翻译，处理期间可翻页；支持选中英文临时查看中文。
@@ -47,3 +48,5 @@ npm run package
 导出文件目前是图像 PDF，不包含可搜索的中文文字层。扫描 PDF 的原始字符识别错误不会自动得到保证修正。
 
 完整操作说明见 [文档助手使用说明](app/文档助手使用说明.md)。第三方组件来源和许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+需求约定、模块说明、验证范围与后续迭代注意事项见 [项目交接与迭代说明](项目交接与迭代说明.md)。

@@ -56,7 +56,7 @@ async function requestDeepSeekTranslation(lines, professional) {
     messages: [
       {
         role: 'system',
-        content: 'Translate English PDF text into Simplified Chinese. Return only a JSON object with a translations array containing exactly one translated string for each input string, in the same order. Preserve numbers, units, formulas, citations, proper names, and pin identifiers such as VIN, CSN, DIM, SW and GND. Keep every [KEEP_N] placeholder exactly once, unchanged, in its original semantic position. Do not add explanations. ' + (professional ? 'Use standard electronics terminology: constant current driver=恒流驱动器, current sense resistor=电流采样电阻, pin=引脚, switching node=开关节点, standby state=待机状态, Parameter=参数, Symbol=符号, Conditions=测试条件, Min=最小值, Typ=典型值, Max=最大值, Unit=单位, Absolute Maximum Ratings=绝对最大额定值. Translate table cell descriptions independently; never move values between cells.' : ''),
+        content: 'Translate English PDF text into Simplified Chinese. Return only a JSON object with a translations array containing exactly one translated string for each input string, in the same order. Preserve numbers, units, formulas, citations, proper names, and pin identifiers such as VIN, CSN, DIM, SW and GND. Keep every [KEEP_N] placeholder exactly once, unchanged, in its original semantic position. Do not omit clauses or add explanations. ' + (professional ? 'Use standard electronics terminology: constant current driver=恒流驱动器, current sense resistor=电流采样电阻, pin=引脚, switching node=开关节点, standby state=待机状态, on-board ROM=片内ROM (in IC datasheets), multidrop=多点挂接, scratchpad memory=暂存器, open-drain=开漏, parasite power=寄生供电, Parameter=参数, Part=型号, Symbol=符号, Conditions=测试条件, Min=最小值, Typ=典型值, Max=最大值, Unit=单位, Absolute Maximum Ratings=绝对最大额定值. Translate table cell descriptions independently; never move values between cells.' : ''),
       },
       { role: 'user', content: JSON.stringify({ lines }) },
     ],
@@ -133,7 +133,6 @@ async function translate(text, professional = false) {
   if (professional && /^(?:age of )?dim\b/i.test(text) && /lower than|higher than|voltage/i.test(text)) {
     text = text.replace(/^age of dim\b/i, 'voltage of DIM pin');
   }
-  if (/[=±≤≥∑√]/.test(text) && !/[.!?]/.test(text)) return source;
   if (professional) {
     for (const [english, chinese] of [...phrases].sort((a, b) => b[0].length - a[0].length)) {
       const escaped = english.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&');
@@ -164,9 +163,9 @@ async function translate(text, professional = false) {
       const data = JSON.parse(await request(google));
       result = data[0].map(part => part[0]).join('');
     } catch (error) {
-      if (!/429|Too Many Requests/i.test(error.message)) throw error;
+      if (!/429|Too Many Requests|超时|连接|timeout|connect|network|name.*resol/i.test(error.message)) throw error;
       googleLimitedUntil = Date.now() + 30 * 60 * 1000;
-      console.warn('Google 翻译限流，临时切换备用翻译服务。');
+      console.warn('Google 翻译暂不可用，临时切换备用翻译服务。');
     }
   }
   if (result === undefined) {

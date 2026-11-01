@@ -1,6 +1,6 @@
 import * as pdfjs from '/vendor/pdf.mjs';
-import {LAYOUT_VERSION,analyzeRaster,buildReadingPage,typesetPage,paintRebuiltPage} from '/rebuild.mjs';
-import {protectTableText} from '/tables.mjs';
+import {LAYOUT_VERSION,analyzeRaster,buildReadingPage,typesetPage,paintRebuiltPage,extractNativeRows,inlineRuns} from '/rebuild.mjs';
+import {protectTableText,protectInlineText,tableHeaderTranslations} from '/tables.mjs';
 pdfjs.GlobalWorkerOptions.workerSrc='/vendor/pdf.worker.mjs';
 window.readerReady=true;
 const $=id=>document.getElementById(id),measure=document.createElement('canvas').getContext('2d');
@@ -37,17 +37,7 @@ async function openFile(file){if(!file||busy)return;if(!/\.pdf$/i.test(file.name
 function makeCanvas(w,h){const canvas=document.createElement('canvas');canvas.width=Math.ceil(w);canvas.height=Math.ceil(h);return canvas}
 async function sourceCanvas(page,factor){const viewport=page.getViewport({scale:factor}),canvas=makeCanvas(viewport.width,viewport.height);canvas.pdfScale=factor;await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;return canvas}
 function nativeRows(content,base,regions){
-  const rows=[];
-  for(const item of content.items.filter(item=>item.str?.trim())){
-    const tx=pdfjs.Util.transform(base.transform,item.transform),height=Math.max(3,Math.hypot(tx[2],tx[3]));
-    const row={text:item.str.trim(),x:tx[4],y:tx[5]-height*.82,width:Math.max(2,item.width),height,
-      mathFont:/math|symbol|cmsy|cmex|stix/i.test(content.styles[item.fontName]?.fontFamily||'')};
-    const region=regions.map(r=>({r,area:Math.max(0,Math.min(row.x+row.width,r.x+r.width)-Math.max(row.x,r.x))*Math.max(0,Math.min(row.y+row.height,r.y+r.height)-Math.max(row.y,r.y))})).sort((a,b)=>b.area-a.area)[0]?.r;
-    if(!region)continue;row.regionId=region.id;row.parts=[{...row}];
-    const line=rows.find(other=>other.regionId===row.regionId&&Math.abs(other.y-row.y)<height*.32&&row.x>=other.x&&row.x-other.x-other.width<height);
-    if(line){line.parts.push(...row.parts);line.text+=' '+row.text;line.width=Math.max(line.width,row.x+row.width-line.x);line.mathFont||=row.mathFont;line.height=Math.max(line.height,height)}else rows.push(row);
-  }
-  return rows;
+  return extractNativeRows(content,base,regions,pdfjs.Util.transform);
 }
 async function getPageData(n){
   if(pageData.has(n))return pageData.get(n);
@@ -107,7 +97,7 @@ async function render(){
     const layer=document.createElement('div');layer.className='rebuilt-layer';$('translated').append(layer);
     for(const p of placed){const div=document.createElement('div');div.className='rebuilt-paragraph';if(p.tableCell)div.dataset.tableCell='true';
       Object.assign(div.style,{left:p.x*currentScale+'px',top:p.y*currentScale+'px',width:p.width*currentScale+'px',fontSize:p.fontSize*currentScale+'px',lineHeight:p.lineHeight*currentScale+'px',fontWeight:p.heading?'600':'400'});
-      p.lines.forEach((text,i)=>{const line=document.createElement('div');line.textContent=text;if(!i&&p.indent)line.style.paddingLeft=p.indent*currentScale+'px';div.append(line)});layer.append(div);
+      p.lines.forEach((text,i)=>{const line=document.createElement('div');for(const run of inlineRuns(text)){const span=document.createElement('span');span.textContent=run.text;if(run.script)Object.assign(span.style,{fontSize:'70%',position:'relative',top:run.script==='sub'?'.54em':'-.22em'});line.append(span)}if(!i&&p.indent)line.style.paddingLeft=p.indent*currentScale+'px';div.append(line)});layer.append(div);
     }
     const selection=document.createElement('div');selection.className='text-layer';$('original').append(selection);
     for(const paragraph of model.paragraphs)for(const row of paragraph.sourceRows){const span=document.createElement('span');span.textContent=row.text;Object.assign(span.style,{left:row.x*currentScale+'px',top:row.y*currentScale+'px',width:row.width*currentScale+'px',height:row.height*1.2*currentScale+'px',fontSize:row.height*currentScale+'px'});selection.append(span)}
@@ -120,8 +110,12 @@ function splitRequest(text){
 async function translateNumber(n,model){
   if(translations.has(n))return;
   const inputs=[],owners=[],restorers=[];
-  for(const p of model.paragraphs)for(const part of splitRequest(p.text)){const safe=p.tableCell?protectTableText(part):{text:part,restore:text=>text};inputs.push(safe.text);owners.push(p.id);restorers.push(safe.restore)}
   const result=Array(model.paragraphs.length).fill('');
+  for(const p of model.paragraphs){
+    const heading=p.tableCell&&tableHeaderTranslations.get(p.text.trim().replace(/\s+/g,' ').toUpperCase());
+    if(heading){result[p.id]=heading;continue}
+    for(const part of splitRequest(p.text)){const safe=p.tableCell?protectTableText(part):protectInlineText(part);inputs.push(safe.text);owners.push(p.id);restorers.push(safe.restore)}
+  }
   for(let start=0;start<inputs.length;start+=12){
     status('正在翻译第 '+n+' 页（'+Math.min(start+12,inputs.length)+'/'+inputs.length+' 段）…');
     const response=await fetch('/api/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lines:inputs.slice(start,start+12),professional:$('professional').checked})});

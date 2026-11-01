@@ -1,6 +1,6 @@
 {
   "name": "shixu",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "时叙：本地 PDF 中英对照阅读助手，支持电子数据手册表格翻译、OCR、DeepSeek API 与 Windows 便携运行",
   "engines": {
