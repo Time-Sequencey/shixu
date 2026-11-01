@@ -1,0 +1,16 @@
+name: 时叙 · PDF 双语阅读助手
+authors:
+  - Time-Sequencey
+category: Tool
+tags:
+  - PDF
+  - AI翻译
+  - 电子数据手册
+  - OCR
+  - DeepSeek
+status: in-progress
+updated: "2026-11-01"
+summary: 面向电子数据手册的本地 PDF 双语阅读工具，支持 AI 翻译、表格单元格翻译、英文 OCR，以及中文版和中英对照 PDF 导出。
+readme: README.md
+links:
+  download: https://github.com/Time-Sequencey/shixu/releases/latest
