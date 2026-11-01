@@ -1,6 +1,6 @@
 // Page geometry uses PDF points; image analysis never changes the source page.
 import {detectTableGrids,buildTables,paintTables} from './tables.mjs';
-export const LAYOUT_VERSION = 'rebuild-5.2-geometry';
+export const LAYOUT_VERSION = 'rebuild-5.4-report-regressions';
 const median = values => { const a = values.filter(Number.isFinite).sort((a,b)=>a-b); return a.length ? a[Math.floor(a.length/2)] : 9; };
 const overlap = (a,b) => Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y));
 const bounds = rows => { const x=Math.min(...rows.map(r=>r.x)),y=Math.min(...rows.map(r=>r.y));return {x,y,width:Math.max(...rows.map(r=>r.x+r.width))-x,height:Math.max(...rows.map(r=>r.y+r.height))-y}; };
@@ -16,15 +16,25 @@ export function extractNativeRows(content,base,regions,transform){
       mathFont:/math|symbol|cmsy|cmex|stix/i.test(content.styles[item.fontName]?.fontFamily||'')};
   });
   const subs='₀₁₂₃₄₅₆₇₈₉',supers='⁰¹²³⁴⁵⁶⁷⁸⁹',attached=new Set();
+  // Publishers often draw an exponent's minus sign and digits separately.
+  // Join those at their shared baseline before looking for the body-size host.
+  for(const sign of fragments.filter(r=>/^[+−–-]$/.test(r.text))){
+    const digit=fragments.find(r=>r!==sign&&/^\d{1,3}$/.test(r.text)&&Math.abs(r.height-sign.height)<.2&&Math.abs(r.baseline-sign.baseline)<.2&&Math.abs(r.x-sign.x-sign.width)<.5);
+    if(digit){sign.text+=digit.text;sign.width=digit.x+digit.width-sign.x;attached.add(digit)}
+  }
   for(const small of [...fragments].sort((a,b)=>a.height-b.height)){
-    if(small.rotated||!/^(?:\d{1,3}|st|nd|rd|th)$/.test(small.text))continue;
-    const host=fragments.filter(big=>big!==small&&!attached.has(big)&&!big.rotated&&big.height>small.height*1.18&&big.height<small.height*2.5&&/[A-Za-z0-9]$/.test(big.text)&&small.x>=big.x+big.width-big.height*.15&&small.x-big.x-big.width<big.height*.45&&Math.abs(small.y-big.y)>big.height*.15&&Math.abs(small.baseline-big.baseline)<big.height*.65).sort((a,b)=>Math.abs(small.x-a.x-a.width)-Math.abs(small.x-b.x-b.width))[0];
+    if(attached.has(small)||small.rotated||!(/^(?:[+−–-]?\d{1,3}|[+−–-]|st|nd|rd|th|max|[a-zα-ω]|\[\d+(?:[,–-]\d+)*\]|[#*,\d]+)$/.test(small.text)||/^(?:[A-Z]{1,8}|max|[a-zα-ω])(?:$|\s|[)\]}=<>≤≥,/])/.test(small.text)))continue;
+    const host=fragments.filter(big=>big!==small&&!attached.has(big)&&!big.rotated&&big.height>small.height*1.18&&big.height<small.height*2.5&&(/[\p{L}0-9)]$/u.test(big.text)||/^\[/.test(small.text)&&/[.,\]]$/.test(big.text))&&small.x>=big.x+big.width-big.height*.4&&small.x-big.x-big.width<big.height*.6&&Math.abs(small.baseline-big.baseline)<big.height*.75).sort((a,b)=>Math.abs(small.x-a.x-a.width)-Math.abs(small.x-b.x-b.width))[0];
     if(!host)continue;
     const alphabet=small.y>host.y?subs:supers;
-    host.text+=/^[a-z]+$/.test(small.text)?small.text:small.text.replace(/\d/g,d=>alphabet[Number(d)]);host.width=Math.max(host.width,small.x+small.width-host.x);attached.add(small);
+    host.text+=/^[+−–-]?\d+$/.test(small.text)?small.text.replace(/\d/g,d=>alphabet[Number(d)]).replace(/[−–-]/g,alphabet===subs?'₋':'⁻').replace(/\+/g,alphabet===subs?'₊':'⁺'):/^[+−–-]$/.test(small.text)?small.text.replace(/[−–-]/g,'⁻').replace(/\+/g,'⁺'):small.text;host.width=Math.max(host.width,small.x+small.width-host.x);attached.add(small);
+  }
+  for(const small of fragments.filter(r=>!attached.has(r)&&/^[\d*#,]+$/.test(r.text))){
+    const next=fragments.filter(big=>big!==small&&!attached.has(big)&&big.height>small.height*1.18&&big.height<small.height*2&&big.x>=small.x+small.width&&big.x-small.x-small.width<big.height*.7&&small.baseline<big.baseline&&big.baseline-small.baseline<big.height*.7).sort((a,b)=>a.x-b.x)[0];
+    if(next){const right=next.x+next.width;next.text=small.text.replace(/\d/g,d=>supers[Number(d)])+' '+next.text;next.x=small.x;next.width=right-next.x;attached.add(small)}
   }
   const rows=[];
-  for(const item of fragments.filter(r=>!attached.has(r)).sort((a,b)=>a.y-b.y||a.x-b.x)){
+  for(const item of fragments.filter(r=>!attached.has(r)).sort((a,b)=>Math.abs(a.baseline-b.baseline)<Math.min(a.height,b.height)*.2?a.x-b.x:a.y-b.y||a.x-b.x)){
     const region=regions.map(r=>({r,area:overlap(item,r)})).sort((a,b)=>b.area-a.area)[0]?.r;
     if(!region)continue;
     const row={...item,regionId:region.id,parts:[{...item}]};
@@ -36,7 +46,7 @@ export function extractNativeRows(content,base,regions,transform){
     }else rows.push(row);
   }
   // PDF bullet glyphs are often private-use characters in a symbol font.
-  for(const row of rows){if(/^[•▪◦]/u.test(row.text)){row.bullet=true;row.text=row.text.replace(/^[•▪◦]\s*/u,'')}}
+  for(const row of rows){if(/^[\u0083•▪◦]/u.test(row.text)){row.bullet=true;row.text=row.text.replace(/^[\u0083•▪◦]\s*/u,'')}}
   for(const row of rows)row.regionId=regions.map(r=>({r,area:overlap(row,r)})).sort((a,b)=>b.area-a.area)[0]?.r.id;
   return rows.filter(r=>r.text.trim());
 }
@@ -115,7 +125,7 @@ export function isFormula(row){
   return (symbols>0&&words.length<=2&&text.length<220&&!/[.!?]\s*$/.test(text))||(/^\(?\d+\)?$/.test(text)&&row.equationNumber===true);
 }
 
-const figureCaption=text=>/^Fig(?:ure)?\.?\s*\d+(?:[.\s:]|$)/i.test(text)&&!/^Fig(?:ure)?\.?\s*\d+\s+(?:shows?|illustrates?|depicts?|presents?|is|provides?)\b/i.test(text);
+const figureCaption=text=>/^Fig(?:ure)?\.?\s*(?:[A-Z][.-]?\s*)?\d+(?:[.\s:]|$)/i.test(text)&&!/^Fig(?:ure)?\.?\s*\d+\s+(?:shows?|illustrates?|depicts?|presents?|is|provides?)\b/i.test(text);
 
 // Text geometry can reveal a gutter even when bullets or horizontal rules bridge it.
 export function refineTextColumns(rows,analysis,page){
@@ -158,12 +168,14 @@ export function refineTextColumns(rows,analysis,page){
 }
 
 export function buildReadingPage(rows,analysis,page,options={}){
+  const rasterRegions=analysis.regions;
   const tables=options.professional?buildTables(rows,analysis.tableGrids):[];
   ({rows,analysis}=refineTextColumns(rows.filter(r=>!tables.some(t=>overlap(r,t)>r.width*r.height*.5)),analysis,page));
   const textRows=rows.filter(r=>r.text?.trim()).map(r=>({...r,text:r.text.trim(),bullet:r.bullet||(analysis.bullets||[]).some(b=>r.x-b.x-b.width>=1&&r.x-b.x-b.width<12&&Math.abs(b.y+b.height/2-r.y-r.height/2)<r.height*.45)}));
   const protectedRects=analysis.graphics.filter(r=>!tables.some(t=>overlap(r,t)>Math.min(r.width*r.height,t.width*t.height)*.8))
     // Raised glyphs can join two prose lines into a small raster component.
-    .filter(r=>!(r.height<45&&r.width<110&&textRows.some(t=>overlap(r,t)>0&&t.width>r.width*2&&(t.text.match(/[A-Za-z]{3,}/g)||[]).length>=5)))
+    .filter(r=>!(r.height<45&&textRows.some(t=>overlap(r,t)>0&&t.width>r.width*2&&(t.text.match(/[A-Za-z]{3,}/g)||[]).length>=5)))
+    .filter(r=>!(r.height<40&&textRows.filter(t=>overlap(r,t)>t.width*t.height*.2&&(t.text.match(/[A-Za-z]{3,}/g)||[]).length>=7).length>=2))
     .map(r=>({...r,kind:'figure'}));
   for(const row of textRows.filter(r=>/^\d+\s+of\s+\d+$/i.test(r.text)&&r.y>page.height*.9))protectedRects.push({...expand(row,1,page),kind:'page-number'});
   // Never collect labels from the adjacent column, even when they are only a
@@ -176,11 +188,24 @@ export function buildReadingPage(rows,analysis,page,options={}){
   };
   const inLane=(r,l)=>r.x>=l.left-2&&r.x+r.width<=l.right+2;
   for(const rect of protectedRects){
+    // Raster components omit disconnected ticks and circuit pin names. Expand
+    // to their original segmentation region before column refinement splits it.
+    const regions=rasterRegions.filter(r=>r.height>35&&overlap(r,rect)>rect.width*rect.height*.45&&r.width*r.height<rect.width*rect.height*5&&!textRows.some(t=>overlap(t,r)>t.width*t.height*.5&&overlap(t,rect)<t.width*t.height*.2&&(t.text.match(/[A-Za-z]{3,}/g)||[]).length>=5));
+    if(rect.height>45&&regions.length)Object.assign(rect,expand(bounds([rect,...regions]),2,page));
     const column=lane(rect);
     const labels=textRows.filter(r=>inLane(r,column)&&(overlap(r,rect)>r.width*r.height*.2||(r.text.length<35&&r.y+r.height>rect.y&&r.y<rect.y+rect.height&&r.x+r.width>rect.x-22&&r.x<rect.x+rect.width+22)));
     if(labels.length)Object.assign(rect,expand(bounds([rect,...labels]),3,page));
     const logoRegion=analysis.regions.find(r=>r.y<page.height*.16&&r.height<100&&r.width<page.width*.4&&overlap(rect,r)>rect.width*rect.height*.6);
     if(logoRegion)Object.assign(rect,expand(bounds([rect,logoRegion]),2,page));
+  }
+  // A partial logo crop intersecting a heading must not sit under a second
+  // translated copy of that same heading.
+  for(const rect of protectedRects.filter(r=>r.y<page.height*.14&&r.height<60)){
+    const crossing=textRows.filter(t=>overlap(t,rect)>0&&t.height>12&&t.width>rect.width*1.3);
+    if(crossing.length)Object.assign(rect,expand(bounds([rect,...crossing]),2,page));
+  }
+  for(const row of textRows){
+    if(/^[A-Z]\d?$/.test(row.text)&&protectedRects.some(r=>r.kind==='figure'&&r.height>80&&row.x>=r.x-20&&row.x+row.width<=r.x+r.width+20&&row.y>r.y-45&&row.y<r.y+r.height+45))protectedRects.push({...expand(row,1,page),kind:'figure-label'});
   }
   // Ruled tables are visual objects: retain cells, symbols, and numeric alignment.
   const tableCaptions=textRows.filter(r=>/^Table\s*\d/i.test(r.text));
@@ -221,6 +246,16 @@ export function buildReadingPage(rows,analysis,page,options={}){
       Object.assign(nearby[0],expand(bounds([r,...labels,...captionLines]),4,page));for(const other of nearby.slice(1))protectedRects.splice(protectedRects.indexOf(other),1)
     }
   }
+  // Some PDFs draw a fraction bar as a vector, with no equals sign in the
+  // text layer. Preserve compact stacks of mathematical identifiers together.
+  for(const region of analysis.regions){
+    const lines=textRows.filter(r=>r.regionId===region.id);
+    if(lines.length<2||region.height>90||region.width>page.width*.75)continue;
+    const text=lines.map(r=>r.text).join(' ');
+    const prose=(text.match(/[A-Za-z]{3,}/g)||[]).some(word=>/[a-z]/.test(word)&&!/^(?:log|sin|cos|tan|sqrt)$/.test(word));
+    const stacked=lines.some(a=>lines.some(b=>b!==a&&b.y>a.y+a.height*.6&&b.y<a.y+a.height*3&&Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>Math.min(a.width,b.width)*.4));
+    if(!prose&&/\d/.test(text)&&stacked&&!tables.some(t=>overlap(region,t)>region.width*region.height*.5))protectedRects.push({...expand(region,2,page),kind:'formula'});
+  }
   for(const row of textRows.filter(isFormula)){
     if(tables.some(t=>overlap(row,t)>row.width*row.height*.5))continue;
     if(protectedRects.some(r=>overlap(row,r)>row.width*row.height*.5))continue;
@@ -247,6 +282,20 @@ export function buildReadingPage(rows,analysis,page,options={}){
     const left=Math.max(r.x,table.x),right=Math.min(r.x+r.width,table.x+table.width),top=Math.max(r.y,table.y),bottom=Math.min(r.y+r.height,table.y+table.height);
     return [{...r,height:top-r.y},{...r,y:bottom,height:r.y+r.height-bottom},{...r,y:top,height:bottom-top,width:left-r.x},{...r,x:right,y:top,height:bottom-top,width:r.x+r.width-right}].filter(p=>p.width>0&&p.height>0);
   });
+  // A crop touching a prose line cannot silently discard the rest of the line.
+  // Keep the complete line as a separate crop: expanding a large figure to its
+  // bounding box can capture unrelated text and cut an earlier visited row.
+  const completeRows=[];
+  const completed=new Set();
+  let changed=true;
+  while(changed){changed=false;for(const row of textRows){
+    if(completed.has(row))continue;
+    const hits=[...preserved,...completeRows].filter(r=>overlap(row,r)>0);
+    if(hits.length&&!hits.some(r=>overlap(row,r)>=row.width*row.height*.99)&&!tables.some(t=>overlap(row,t)>row.width*row.height*.5)){
+      completeRows.push({...expand(row,.2,page),kind:'complete-source-row'});completed.add(row);changed=true;
+    }
+  }}
+  preserved.push(...completeRows);
   const exclusions=[...preserved,...tables];
   const prose=textRows.filter(row=>!exclusions.some(r=>overlap(row,r)>row.width*row.height*.22));
   const paragraphs=[],zones=[];
@@ -278,12 +327,14 @@ export function buildReadingPage(rows,analysis,page,options={}){
     const ids=[];
     for(const line of lines){const previous=group[group.length-1];
       const paragraphChange=previous&&line.paragraphId&&previous.paragraphId&&line.paragraphId!==previous.paragraphId;
-      const indent=previous&&!group[0].bullet&&line.x-bulletIndent>lineHeight*.7&&previous.x+previous.width>left+fullWidth*.6;
+      const noteStart=/^Note\s+\d+\s*:/i.test(line.text);
+      const hangingNote=previous&&/^Note\s+\d+\s*:/i.test(group[0].text)&&group[0].parts?.slice(1).some(part=>Math.abs(part.x-line.x)<lineHeight*.6);
+      const indent=previous&&!group[0].bullet&&!hangingNote&&line.x-bulletIndent>lineHeight*.7&&previous.x+previous.width>left+fullWidth*.6;
       const gap=previous&&line.y-previous.y-previous.height;
       const sizeChange=previous&&Math.max(line.height,previous.height)/Math.max(1,Math.min(line.height,previous.height))>1.3;
       const headingChange=previous&&/^[A-Z][A-Z\s-]{3,}$/.test(previous.text)&&!previous.bullet;
       const shortEnd=previous&&!group[0].bullet&&previous.width<fullWidth*.72&&gap>=Math.max(lineHeight*.3,typicalGap*.8);
-      if(previous&&(line.bullet||paragraphChange||indent||gap>Math.max(lineHeight*.8,typicalGap+lineHeight*.6)||sizeChange||shortEnd||headingChange)){const id=finish();if(id!=null)ids.push(id)}
+      if(previous&&(line.bullet||noteStart||paragraphChange||indent||gap>Math.max(lineHeight*.8,typicalGap+lineHeight*.6)||sizeChange||shortEnd||headingChange)){const id=finish();if(id!=null)ids.push(id)}
       group.push(line);
     }
     const id=finish();if(id!=null)ids.push(id);
@@ -293,6 +344,12 @@ export function buildReadingPage(rows,analysis,page,options={}){
     zones.push({id:zones.length,x:left,y:box.y,width:fullWidth,height:Math.max(box.height,bottom-box.y),paragraphIds:ids,sourceFont:lineHeight});
   }
   // Do not leave isolated one-line OCR fragments unrepresented.
+  const assignedRows=new Set(paragraphs.flatMap(p=>p.sourceRows));
+  for(const row of prose.filter(r=>!assignedRows.has(r))){
+    const id=paragraphs.length,zoneId=zones.length;
+    paragraphs.push({id,zoneId,text:row.text,sourceRows:[row],x:row.x,y:row.y,width:row.width,height:row.height,fontSize:row.height,bullet:row.bullet,indent:false,heading:false});
+    zones.push({id:zoneId,x:row.x,y:row.y,width:row.width,height:row.height+2,paragraphIds:[id],sourceFont:row.height});
+  }
   for(const table of tables)for(const cell of table.cells.filter(c=>c.translate)){
     const id=paragraphs.length,zoneId=zones.length,padding=Math.min(3,cell.width*.07);
     paragraphs.push({id,zoneId,text:cell.text,sourceRows:cell.sourceRows,x:cell.x+padding,y:cell.y+2,width:cell.width-padding*2,height:cell.height-4,fontSize:cell.fontSize,heading:cell.header,indent:false,tableCell:true});
@@ -303,7 +360,7 @@ export function buildReadingPage(rows,analysis,page,options={}){
 
 export function wrapParagraph(ctx,text,width,font,indent=0){
   const lines=[];let current='',limit=width-indent;
-  const tokens=text.match(/[A-Za-z0-9_]+(?:[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+)?(?:[.'’°µμ+-][A-Za-z0-9_]+)*|\s+|[^\x00-\x7F]|./gu)||[];
+  const tokens=text.match(/[A-Za-z0-9_]+(?:[₀-₉₊₋⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)?(?:[.'’°µμ+-][A-Za-z0-9_]+)*|\s+|[^\x00-\x7F]|./gu)||[];
   for(let token of tokens){
     if(!current&&/^\s+$/.test(token))continue;
     if(measureInline(ctx,current+token)>limit&&current){
@@ -317,13 +374,12 @@ export function wrapParagraph(ctx,text,width,font,indent=0){
 }
 
 export function inlineRuns(text){
-  return (text.match(/[₀-₉]+|[⁰¹²³⁴⁵⁶⁷⁸⁹]+|[^₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+/gu)||[]).map(value=>{
-    const sub=/^[₀-₉]/u.test(value),sup=/^[⁰¹²³⁴⁵⁶⁷⁸⁹]/u.test(value);
-    return {text:sub?value.replace(/[₀-₉]/gu,d=>String('₀₁₂₃₄₅₆₇₈₉'.indexOf(d))):sup?value.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/gu,d=>String('⁰¹²³⁴⁵⁶⁷⁸⁹'.indexOf(d))):value,script:sub?'sub':sup?'super':null};
+  return (text.match(/[₀-₉₊₋]+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+|[^₀-₉₊₋⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+/gu)||[]).map(value=>{
+    const sub=/^[₀-₉₊₋]/u.test(value),sup=/^[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]/u.test(value);
+    return {text:sub?value.replace(/[₀-₉₊₋]/gu,d=>'0123456789+−'['₀₁₂₃₄₅₆₇₈₉₊₋'.indexOf(d)]):sup?value.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]/gu,d=>'0123456789+−'['⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻'.indexOf(d)]):value.replace(/[\u{1D400}-\u{1D7FF}]/gu,c=>c.normalize('NFKC')),script:sub?'sub':sup?'super':null};
   });
 }
 function measureInline(ctx,text){
-  if(!/[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]/u.test(text))return ctx.measureText(text).width;
   const original=ctx.font;let width=0;
   for(const run of inlineRuns(text)){ctx.font=run.script?original.replace(/([\d.]+)px/,(_,n)=>Number(n)*.7+'px'):original;width+=ctx.measureText(run.text).width}
   ctx.font=original;return width;
@@ -357,7 +413,10 @@ export function typesetPage(ctx,model,translations){
     // scaled export, and validate the actual final line set after fitting.
     let fitted=trial(lo*.97);
     for(let i=0;fitted.height>zone.height+.01&&i<30;i++){lo*=.97;fitted=trial(lo*.97)}
-    placed.push(...fitted.result);
+    // Preserve a complete source block rather than shrink technical text below
+    // legibility. Canvas and DOM both use this same source fallback decision.
+    if(fitted.result.some(p=>p.fontSize<5.5)&&paragraphs.every(p=>p.sourceRows?.length))placed.push({zoneId:zone.id,sourceFallback:true,sourceRect:bounds(paragraphs.flatMap(p=>p.sourceRows))});
+    else placed.push(...fitted.result);
   }
   return placed;
 }
@@ -370,7 +429,7 @@ export function paintRebuiltPage(ctx,source,model,placed,scale){
   ctx.strokeStyle='#aeb4b1';ctx.lineWidth=.45*scale;
   for(const r of model.rules){if([...model.preserved,...(model.tables||[])].some(p=>overlap(r,p)>r.width*r.height*.5))continue;ctx.beginPath();ctx.moveTo(r.x*scale,r.y*scale);ctx.lineTo((r.x+r.width)*scale,r.y*scale);ctx.stroke()}
   ctx.fillStyle='#111';ctx.textBaseline='top';
-  for(const p of placed){ctx.font=`${p.heading?'600 ':''}${p.fontSize*scale}px "Microsoft YaHei", sans-serif`;
+  for(const p of placed){if(p.sourceFallback){const r=p.sourceRect;ctx.drawImage(source,r.x*sx,r.y*sy,r.width*sx,r.height*sy,r.x*scale,r.y*scale,r.width*scale,r.height*scale);continue}ctx.font=`${p.heading?'600 ':''}${p.fontSize*scale}px "Microsoft YaHei", sans-serif`;
     p.lines.forEach((line,i)=>paintInline(ctx,line,(p.x+(i?0:p.indent))*scale,(p.y+i*p.lineHeight)*scale,p.fontSize*scale));}
   ctx.restore();
 }

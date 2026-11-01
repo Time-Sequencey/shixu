@@ -4,6 +4,14 @@ const area=(a,b)=>Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)
 const unique=(values,tolerance=2)=>{const out=[];for(const n of [...values].sort((a,b)=>a-b)){if(!out.length||n-out.at(-1)>tolerance)out.push(n);else out[out.length-1]=(out.at(-1)+n)/2}return out};
 function thinRules(lines,horizontal){const out=[];for(const line of lines){const match=out.find(r=>Math.abs((horizontal?r.y:r.x)-(horizontal?line.y:line.x))<2&&Math.abs((horizontal?r.x:r.y)-(horizontal?line.x:line.y))<3&&Math.abs((horizontal?r.width:r.height)-(horizontal?line.width:line.height))<4);if(!match)out.push(line)}return out}
 export function detectTableGrids(ink,w,h,unit){
+  // A grey header is a filled band in the binary image. Keep its outline,
+  // rather than treating every interior scanline as another table boundary.
+  const outline=ink.slice(),radius=Math.max(2,Math.ceil(1.5/unit));
+  for(let y=radius;y<h-radius;y++)for(let x=radius;x<w-radius;x++){
+    const i=y*w+x,d=radius*w;
+    if(ink[i]&&ink[i-radius]&&ink[i+radius]&&ink[i-d]&&ink[i+d]&&ink[i-d-radius]&&ink[i-d+radius]&&ink[i+d-radius]&&ink[i+d+radius])outline[i]=0;
+  }
+  ink=outline;
   const horizontal=[],vertical=[];
   for(let y=0;y<h;y++){let start=-1;for(let x=0;x<=w;x++){
     if(x<w&&ink[y*w+x]){if(start<0)start=x}
@@ -24,7 +32,7 @@ export function detectTableGrids(ink,w,h,unit){
     let chunks=[[]];for(const y of ys){
       const previous=chunks.at(-1).at(-1);
       const connected=previous!==undefined&&vertical.some(r=>Math.abs(r.x-x)<3&&r.y<=previous+2&&r.y+r.height>=y-2);
-      if(previous!==undefined&&y-previous>60&&!connected)chunks.push([]);
+      if(previous!==undefined&&y-previous>40&&!connected)chunks.push([]);
       chunks.at(-1).push(y);
     }
     for(const edges of chunks){if(edges.length<3)continue;const top=edges[0],bottom=edges.at(-1);
@@ -41,6 +49,7 @@ export function detectTableGrids(ink,w,h,unit){
 
 export function tableTextNeedsTranslation(text){
   if(!text.trim())return false;
+  if(/^[A-Z]{2,8}\s+[A-Z]{1,6}-?\d+[A-Za-z0-9+_-]*$/.test(text.trim()))return false;
   if(/^N\.?\s*C\.?$/i.test(text.trim()))return false;
   if(/^(?:\(?tCONV(?:\/\d+)?\)?|[0-9A-F]{2,}[hH])$/.test(text.trim()))return false;
   if(/^(?:parameter|symbol|conditions?|test conditions?|min(?:imum)?|typ(?:ical)?|max(?:imum)?|units?|value|description|function|name|part|temp range|pin-package|top mark|current|voltage|frequency|resistance|temperature|power|supply|input|output|pin(?: name| no\.?| number)?)$/i.test(text.trim()))return true;
@@ -69,6 +78,9 @@ export const tableHeaderTranslations=new Map(Object.entries({
   'PART':'型号','TEMP RANGE':'温度范围','PIN-PACKAGE':'引脚与封装','TOP MARK':'顶部标记',
   'PIN':'引脚','NAME':'名称','FUNCTION':'功能','PARAMETER':'参数','SYMBOL':'符号','COMMAND':'命令','PROTOCOL':'协议','NOTES':'备注',
   'MIN':'最小值','TYP':'典型值','MAX':'最大值','UNIT':'单位','UNITS':'单位',
+  'VALUE':'数值','TEST CONDITIONS':'测试条件','PIN NAME':'引脚名称',
+  'ORDER CODE':'订购型号','PACKAGE':'封装','BASE QTY':'基本数量','DELIVERY MODE':'交付方式',
+  'OUTPUT CURRENT':'输出电流','INDUCTANCE VALUE':'电感值','SATURATION CURRENT':'饱和电流',
   'MASTER MODE':'主机模式','DATA (LSB FIRST)':'数据（最低位先行）','COMMENTS':'说明',
   'RESET':'复位','PRESENCE':'存在脉冲',
   'REVISION DATE':'修订日期','DESCRIPTION':'说明','PAGES CHANGED':'修改页码',
@@ -79,9 +91,9 @@ export const tableHeaderTranslations=new Map(Object.entries({
   '1-WIRE BUS ACTIVITYAFTER COMMAND IS ISSUED':'命令发出后的1-Wire总线活动',
   '1-WIRE BUS ACTIVITY AFTER COMMAND IS ISSUED':'命令发出后的1-Wire总线活动'
 }));
-const extendedHeader=/^(?:temperature\s*\(°?c\)|digital output\s*\((?:binary|hex)\)|resolution\s*\(bits\)|max conversion time|master mode|data\s*\(lsb first\)|comments|revision date|pages changed)$/i;
+const extendedHeader=/^(?:temperature\s*\(°?c\)|digital output\s*\((?:binary|hex)\)|resolution\s*\(bits\)|max conversion time|master mode|data\s*\(lsb first\)|comments|revision date|pages changed|order code|package|base qty|delivery mode|output current|inductance value|saturation current)$/i;
 export function protectInlineText(text){
-  const values=[];const masked=text.replace(/[A-Za-z]+[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+/gu,value=>`[KEEP_${values.push(value)-1}]`);
+  const values=[];const masked=text.replace(/[A-Za-z]+[₀-₉₊₋⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+/gu,value=>`[KEEP_${values.push(value)-1}]`);
   return {text:masked,restore(translated){for(let i=0;i<values.length;i++)if(translated.split(`[KEEP_${i}]`).length!==2)throw Error('译文未完整保留上下标，请重试该页');return translated.replace(/\[KEEP_(\d+)\]/g,(_,i)=>{if(!values[Number(i)])throw Error('译文上下标标记错误');return values[Number(i)]})}};
 }
 
@@ -105,7 +117,9 @@ export function buildTables(rawRows,grids){
       const top=grid.ys[y],bottom=grid.ys[y+1];let start=xs[0];
       for(let x=1;x<xs.length;x++){
         const last=x===xs.length-1;
-        const divider=last||virtualColumns||!grid.vertical.length||grid.vertical.some(r=>Math.abs(r.x-xs[x])<3&&Math.min(r.y+r.height,bottom)-Math.max(r.y,top)>(bottom-top)*.55);
+        const headerItems=y===0?inside.filter(r=>r.y+r.height/2>=top&&r.y+r.height/2<bottom):[];
+        const inferredHeader=y===0&&headerItems.some(r=>r.x+r.width<xs[x])&&headerItems.some(r=>r.x>xs[x])&&!headerItems.some(r=>r.x<xs[x]-1&&r.x+r.width>xs[x]+1)&&grid.vertical.some(r=>Math.abs(r.x-xs[x])<3&&r.y<=bottom+40&&r.y+r.height>bottom+12);
+        const divider=last||virtualColumns||!grid.vertical.length||inferredHeader||grid.vertical.some(r=>Math.abs(r.x-xs[x])<3&&Math.min(r.y+r.height,bottom)-Math.max(r.y,top)>(bottom-top)*.55);
         if(!divider)continue;
         const cell={x:start,y:top,width:xs[x]-start,height:bottom-top};start=xs[x];
         const above=cells.find(c=>Math.abs(c.x-cell.x)<2&&Math.abs(c.width-cell.width)<2&&Math.abs(c.y+c.height-top)<2);
@@ -127,9 +141,13 @@ export function buildTables(rawRows,grids){
     const headers=cells.filter(c=>extendedHeader.test(c.text)||/^(?:parameter|symbol|conditions?|test conditions?|min(?:imum)?|typ(?:ical)?|max(?:imum)?|units?|value|description|function|name|part|temp range|pin-package|top mark|command|protocol|notes|pin(?: name| no\.?| number)?)$/i.test(c.text));
     if(headers.length<2)continue;
     const top=Math.min(...headers.map(c=>c.y)),bottom=Math.max(...cells.filter(c=>c.text&&c.y>=top).map(c=>c.y+c.height));
-    const kept=cells.filter(c=>c.y>=top&&c.y<bottom);for(const c of kept){c.header=Math.abs(c.y-top)<2;if(c.header)c.translate=true}
+    const kept=cells.filter(c=>c.y>=top&&c.y<bottom);for(const c of kept){c.header=Math.abs(c.y-top)<2;if(c.header)c.translate||=tableHeaderTranslations.has(c.text.trim().replace(/\s+/g,' ').toUpperCase())}
     const fixedColumns=headers.filter(c=>Math.abs(c.y-top)<2&&/^(?:symbol|units?|master mode|pin (?:no\.?|number))$/i.test(c.text));
-    for(const cell of kept)if(!cell.header&&fixedColumns.some(h=>cell.x>=h.x-2&&cell.x+cell.width<=h.x+h.width+2))cell.translate=false;
+    for(const cell of kept)if(!cell.header&&!/^(?:min|max)$/i.test(cell.text.trim())&&fixedColumns.some(h=>cell.x>=h.x-2&&cell.x+cell.width<=h.x+h.width+2))cell.translate=false;
+    // An unruled sub-row can mix several conditions with a shared limit. Keep
+    // that complete row in place rather than flatten its conditional semantics.
+    const conditional=kept.filter(c=>!c.header&&c.sourceRows.filter(r=>/\bpower\b/i.test(r.text)).length>1);
+    for(const cell of conditional)for(const other of kept)if(other.y<cell.y+cell.height&&other.y+other.height>cell.y)other.translate=false;
     tables.push({...grid,y:top,height:bottom-top,ys:grid.ys.filter(y=>y>=top-1&&y<=bottom+1),horizontal:grid.horizontal.filter(r=>r.y>=top-1&&r.y<=bottom+1),vertical:grid.vertical.map(r=>({...r,y:Math.max(r.y,top),height:Math.min(r.y+r.height,bottom)-Math.max(r.y,top)})).filter(r=>r.height>0),cells:kept});
   }
   return tables;

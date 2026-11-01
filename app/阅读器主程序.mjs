@@ -93,9 +93,9 @@ async function render(){
     const {model}=await getLayout(target);if(current!==renderToken||generation!==epoch)return;
     const canvas=makeCanvas(source.width,source.height);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';$('translated').append(canvas);
     const placed=typesetPage(measure,model,translations.get(target));
-    paintRebuiltPage(canvas.getContext('2d'),source,model,[],currentScale*dpr);
+    paintRebuiltPage(canvas.getContext('2d'),source,model,placed.filter(p=>p.sourceFallback),currentScale*dpr);
     const layer=document.createElement('div');layer.className='rebuilt-layer';$('translated').append(layer);
-    for(const p of placed){const div=document.createElement('div');div.className='rebuilt-paragraph';if(p.tableCell)div.dataset.tableCell='true';
+    for(const p of placed.filter(p=>!p.sourceFallback)){const div=document.createElement('div');div.className='rebuilt-paragraph';if(p.tableCell)div.dataset.tableCell='true';
       Object.assign(div.style,{left:p.x*currentScale+'px',top:p.y*currentScale+'px',width:p.width*currentScale+'px',fontSize:p.fontSize*currentScale+'px',lineHeight:p.lineHeight*currentScale+'px',fontWeight:p.heading?'600':'400'});
       p.lines.forEach((text,i)=>{const line=document.createElement('div');for(const run of inlineRuns(text)){const span=document.createElement('span');span.textContent=run.text;if(run.script)Object.assign(span.style,{fontSize:'70%',position:'relative',top:run.script==='sub'?'.54em':'-.22em'});line.append(span)}if(!i&&p.indent)line.style.paddingLeft=p.indent*currentScale+'px';div.append(line)});layer.append(div);
     }
